@@ -1,6 +1,5 @@
 {
   "version": 2,
-  "name": "biztras-backend",
   "builds": [
     {
       "src": "server.js",
@@ -9,12 +8,13 @@
   ],
   "routes": [
     {
-      "src": "/api/(.*)",
-      "dest": "/server.js"
-    },
-    {
       "src": "/(.*)",
-      "dest": "/server.js"
+      "dest": "server.js"
     }
-  ]
+  ],
+  "functions": {
+    "server.js": {
+      "maxDuration": 30
+    }
+  }
 }
