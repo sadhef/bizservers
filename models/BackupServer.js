@@ -3,7 +3,9 @@ const mongoose = require('mongoose');
 const backupServerSchema = new mongoose.Schema({
   reportTitle: {
     type: String,
-    default: 'Backup Server Cronjob Status'
+    default: 'Backup Server Cronjob Status',
+    trim: true,
+    maxlength: [200, 'Report title cannot exceed 200 characters']
   },
   reportDates: {
     startDate: {
@@ -17,35 +19,122 @@ const backupServerSchema = new mongoose.Schema({
   },
   columns: {
     type: [String],
-    default: ['Server', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Remarks']
+    default: ['Server', 'SERVER STATUS', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Remarks'],
+    validate: {
+      validator: function(arr) {
+        return arr && arr.length > 0;
+      },
+      message: 'At least one column is required'
+    }
   },
   rows: {
     type: [mongoose.Schema.Types.Mixed],
-    default: []
+    default: [],
+    validate: {
+      validator: function(arr) {
+        return Array.isArray(arr);
+      },
+      message: 'Rows must be an array'
+    }
   },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'User',
+    required: true
   },
   updatedBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'User',
+    required: true
+  },
+  version: {
+    type: Number,
+    default: 1
+  },
+  isActive: {
+    type: Boolean,
+    default: true
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
+// Index for better performance
+backupServerSchema.index({ createdBy: 1, updatedAt: -1 });
+backupServerSchema.index({ updatedAt: -1 });
+backupServerSchema.index({ isActive: 1 });
+
+// Virtual for row count
+backupServerSchema.virtual('rowCount').get(function() {
+  return this.rows ? this.rows.length : 0;
+});
+
+// Virtual for column count
+backupServerSchema.virtual('columnCount').get(function() {
+  return this.columns ? this.columns.length : 0;
+});
+
+// Static method to get or create latest report
 backupServerSchema.statics.getLatestReport = async function(userId) {
-  let report = await this.findOne().sort({ updatedAt: -1 });
+  try {
+    console.log(`[BackupServer Model] Getting latest report for user: ${userId}`);
+    
+    let report = await this.findOne({ 
+      isActive: true 
+    }).sort({ updatedAt: -1 });
+    
+    if (!report) {
+      console.log(`[BackupServer Model] No existing report found, creating new one`);
+      report = await this.create({
+        createdBy: userId,
+        updatedBy: userId,
+        reportTitle: 'Backup Server Cronjob Status',
+        reportDates: {
+          startDate: new Date(),
+          endDate: new Date()
+        },
+        columns: ['Server', 'SERVER STATUS', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Remarks'],
+        rows: []
+      });
+      console.log(`[BackupServer Model] Created new report with ID: ${report._id}`);
+    } else {
+      console.log(`[BackupServer Model] Found existing report with ID: ${report._id}, rows: ${report.rows.length}`);
+    }
+    
+    return report;
+  } catch (error) {
+    console.error('[BackupServer Model] Error in getLatestReport:', error);
+    throw error;
+  }
+};
+
+// Pre-save middleware
+backupServerSchema.pre('save', function(next) {
+  console.log(`[BackupServer Model] Pre-save: Saving report with ${this.rows.length} rows and ${this.columns.length} columns`);
   
-  if (!report) {
-    report = await this.create({
-      createdBy: userId,
-      updatedBy: userId
-    });
+  // Increment version on update
+  if (!this.isNew) {
+    this.version += 1;
   }
   
-  return report;
-};
+  // Ensure rows is always an array
+  if (!Array.isArray(this.rows)) {
+    this.rows = [];
+  }
+  
+  // Ensure columns is always an array
+  if (!Array.isArray(this.columns)) {
+    this.columns = ['Server', 'SERVER STATUS', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Remarks'];
+  }
+  
+  next();
+});
+
+// Post-save middleware
+backupServerSchema.post('save', function(doc) {
+  console.log(`[BackupServer Model] Post-save: Report ${doc._id} saved successfully with ${doc.rows.length} rows`);
+});
 
 module.exports = mongoose.model('BackupServer', backupServerSchema);
