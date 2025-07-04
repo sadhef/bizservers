@@ -22,9 +22,9 @@ const backupServerSchema = new mongoose.Schema({
     default: ['Server', 'SERVER STATUS', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Remarks'],
     validate: {
       validator: function(arr) {
-        return arr && arr.length > 0;
+        return arr && arr.length > 0 && arr.every(col => col && col.trim().length > 0);
       },
-      message: 'At least one column is required'
+      message: 'At least one non-empty column is required'
     }
   },
   rows: {
@@ -110,23 +110,81 @@ backupServerSchema.statics.getLatestReport = async function(userId) {
   }
 };
 
-// Pre-save middleware
-backupServerSchema.pre('save', function(next) {
-  console.log(`[BackupServer Model] Pre-save: Saving report with ${this.rows.length} rows and ${this.columns.length} columns`);
-  
-  // Increment version on update
-  if (!this.isNew) {
-    this.version += 1;
+// Method to validate row data
+backupServerSchema.methods.validateRows = function() {
+  if (!this.rows || !Array.isArray(this.rows)) {
+    this.rows = [];
+    return true;
   }
+  
+  // Check if all rows have the required columns
+  const validRows = this.rows.filter(row => {
+    if (!row || typeof row !== 'object') return false;
+    return this.columns.every(column => row.hasOwnProperty(column));
+  });
+  
+  // Update with valid rows
+  this.rows = validRows;
+  return true;
+};
+
+// Method to ensure data consistency
+backupServerSchema.methods.ensureDataConsistency = function() {
+  // Ensure columns is always an array
+  if (!Array.isArray(this.columns)) {
+    this.columns = ['Server', 'SERVER STATUS', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Remarks'];
+  }
+  
+  // Remove empty columns
+  this.columns = this.columns.filter(col => col && col.trim().length > 0);
   
   // Ensure rows is always an array
   if (!Array.isArray(this.rows)) {
     this.rows = [];
   }
   
-  // Ensure columns is always an array
-  if (!Array.isArray(this.columns)) {
-    this.columns = ['Server', 'SERVER STATUS', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Remarks'];
+  // Ensure each row has all columns
+  this.rows = this.rows.map(row => {
+    if (!row || typeof row !== 'object') {
+      const newRow = {};
+      this.columns.forEach(column => {
+        newRow[column] = '';
+      });
+      return newRow;
+    }
+    
+    // Add missing columns
+    this.columns.forEach(column => {
+      if (!row.hasOwnProperty(column)) {
+        row[column] = '';
+      }
+    });
+    
+    // Remove extra columns not in the column list
+    const cleanRow = {};
+    this.columns.forEach(column => {
+      cleanRow[column] = row[column] || '';
+    });
+    
+    return cleanRow;
+  });
+  
+  return this;
+};
+
+// Pre-save middleware
+backupServerSchema.pre('save', function(next) {
+  console.log(`[BackupServer Model] Pre-save: Saving report with ${this.rows.length} rows and ${this.columns.length} columns`);
+  
+  // Ensure data consistency
+  this.ensureDataConsistency();
+  
+  // Validate rows
+  this.validateRows();
+  
+  // Increment version on update
+  if (!this.isNew) {
+    this.version += 1;
   }
   
   next();
@@ -135,6 +193,22 @@ backupServerSchema.pre('save', function(next) {
 // Post-save middleware
 backupServerSchema.post('save', function(doc) {
   console.log(`[BackupServer Model] Post-save: Report ${doc._id} saved successfully with ${doc.rows.length} rows`);
+});
+
+// Pre-validate middleware
+backupServerSchema.pre('validate', function(next) {
+  // Ensure data consistency before validation
+  this.ensureDataConsistency();
+  next();
+});
+
+// Error handling
+backupServerSchema.post('save', function(error, doc, next) {
+  if (error.name === 'MongoError' && error.code === 11000) {
+    next(new Error('Report with this configuration already exists'));
+  } else {
+    next(error);
+  }
 });
 
 module.exports = mongoose.model('BackupServer', backupServerSchema);

@@ -15,7 +15,7 @@ router.get('/data', async (req, res, next) => {
     
     let report = await CloudReport.getLatestReport(req.user._id);
     
-    // Ensure all required fields exist
+    // Ensure all required fields exist with proper defaults
     if (!report.reportDates) {
       report.reportDates = {
         startDate: new Date(),
@@ -31,7 +31,16 @@ router.get('/data', async (req, res, next) => {
       report.rows = [];
     }
     
-    console.log(`[CLOUD-REPORT] Returning data - Rows: ${report.rows.length}, Columns: ${report.columns.length}`);
+    // Ensure each row has all columns
+    const sanitizedRows = report.rows.map(row => {
+      const sanitizedRow = {};
+      report.columns.forEach(column => {
+        sanitizedRow[column] = row[column] || '';
+      });
+      return sanitizedRow;
+    });
+    
+    console.log(`[CLOUD-REPORT] Returning data - Rows: ${sanitizedRows.length}, Columns: ${report.columns.length}`);
     
     res.status(200).json({
       status: 'success',
@@ -39,7 +48,7 @@ router.get('/data', async (req, res, next) => {
         reportTitle: report.reportTitle || 'Cloud Status Report',
         reportDates: report.reportDates,
         columns: report.columns,
-        rows: report.rows,
+        rows: sanitizedRows,
         totalSpaceUsed: report.totalSpaceUsed || '',
         updatedAt: report.updatedAt,
         createdAt: report.createdAt
@@ -79,6 +88,24 @@ router.post('/save', async (req, res, next) => {
       return next(new AppError('Rows must be a valid array', 400));
     }
     
+    if (columns.length === 0) {
+      return next(new AppError('At least one column is required', 400));
+    }
+    
+    // Validate that each row has the correct structure
+    const validatedRows = rows.map((row, index) => {
+      if (!row || typeof row !== 'object') {
+        throw new AppError(`Row ${index + 1} must be a valid object`, 400);
+      }
+      
+      const validatedRow = {};
+      columns.forEach(column => {
+        validatedRow[column] = (row[column] || '').toString().trim();
+      });
+      
+      return validatedRow;
+    });
+    
     // Get or create report
     let report = await CloudReport.getLatestReport(req.user._id);
     
@@ -88,8 +115,8 @@ router.post('/save', async (req, res, next) => {
       startDate: reportDates?.startDate || new Date(),
       endDate: reportDates?.endDate || new Date()
     };
-    report.columns = columns;
-    report.rows = rows;
+    report.columns = columns.filter(col => col && col.trim()); // Remove empty columns
+    report.rows = validatedRows;
     report.totalSpaceUsed = totalSpaceUsed || '';
     report.updatedBy = req.user._id;
     
@@ -111,6 +138,10 @@ router.post('/save', async (req, res, next) => {
     });
   } catch (error) {
     console.error('[CLOUD-REPORT] Error saving data:', error);
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => err.message);
+      return next(new AppError(`Validation failed: ${validationErrors.join(', ')}`, 400));
+    }
     return next(new AppError('Failed to save cloud report data', 500));
   }
 });
@@ -118,17 +149,30 @@ router.post('/save', async (req, res, next) => {
 // Get cloud report history
 router.get('/history', async (req, res, next) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+    
     const reports = await CloudReport.find()
       .sort({ updatedAt: -1 })
       .populate('createdBy', 'name email')
       .populate('updatedBy', 'name email')
-      .limit(50); // Limit to last 50 reports
+      .skip(skip)
+      .limit(limit);
+    
+    const total = await CloudReport.countDocuments();
     
     res.status(200).json({
       status: 'success',
       results: reports.length,
       data: {
-        reports
+        reports,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
       }
     });
   } catch (error) {
@@ -142,6 +186,10 @@ router.delete('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
     
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+      return next(new AppError('Invalid report ID format', 400));
+    }
+    
     const report = await CloudReport.findById(id);
     if (!report) {
       return next(new AppError('Report not found', 404));
@@ -154,6 +202,8 @@ router.delete('/:id', async (req, res, next) => {
     
     await CloudReport.findByIdAndDelete(id);
     
+    console.log(`[CLOUD-REPORT] Report ${id} deleted by user ${req.user._id}`);
+    
     res.status(204).json({
       status: 'success',
       data: null
@@ -161,6 +211,64 @@ router.delete('/:id', async (req, res, next) => {
   } catch (error) {
     console.error('[CLOUD-REPORT] Error deleting report:', error);
     return next(new AppError('Failed to delete report', 500));
+  }
+});
+
+// Update specific report
+router.put('/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { columns, rows, reportTitle, reportDates, totalSpaceUsed } = req.body;
+    
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+      return next(new AppError('Invalid report ID format', 400));
+    }
+    
+    const report = await CloudReport.findById(id);
+    if (!report) {
+      return next(new AppError('Report not found', 404));
+    }
+    
+    // Check if user has permission to update
+    if (req.user.role !== 'admin' && report.createdBy.toString() !== req.user._id.toString()) {
+      return next(new AppError('You do not have permission to update this report', 403));
+    }
+    
+    // Validate input
+    if (columns && !Array.isArray(columns)) {
+      return next(new AppError('Columns must be a valid array', 400));
+    }
+    
+    if (rows && !Array.isArray(rows)) {
+      return next(new AppError('Rows must be a valid array', 400));
+    }
+    
+    // Update fields if provided
+    if (reportTitle !== undefined) report.reportTitle = reportTitle;
+    if (reportDates !== undefined) report.reportDates = reportDates;
+    if (totalSpaceUsed !== undefined) report.totalSpaceUsed = totalSpaceUsed;
+    if (columns !== undefined) report.columns = columns;
+    if (rows !== undefined) report.rows = rows;
+    
+    report.updatedBy = req.user._id;
+    
+    const updatedReport = await report.save();
+    
+    console.log(`[CLOUD-REPORT] Report ${id} updated by user ${req.user._id}`);
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        report: updatedReport
+      }
+    });
+  } catch (error) {
+    console.error('[CLOUD-REPORT] Error updating report:', error);
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => err.message);
+      return next(new AppError(`Validation failed: ${validationErrors.join(', ')}`, 400));
+    }
+    return next(new AppError('Failed to update report', 500));
   }
 });
 
