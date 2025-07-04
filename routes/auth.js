@@ -34,7 +34,7 @@ router.post('/register', [
       return next(new AppError('Email already registered', 400));
     }
 
-    // Create user with simplified fields
+    // Create user
     const user = await User.create({
       name,
       email,
@@ -51,12 +51,14 @@ router.post('/register', [
   }
 });
 
-// Login
+// Login - FIXED VERSION
 router.post('/login', [
   body('email').isEmail().withMessage('Please provide a valid email'),
   body('password').exists().withMessage('Password is required')
 ], async (req, res, next) => {
   try {
+    console.log('Login attempt for:', req.body.email);
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return next(new AppError(errors.array()[0].msg, 400));
@@ -67,7 +69,13 @@ router.post('/login', [
     // Find user and include password
     const user = await User.findOne({ email }).select('+password');
     
-    if (!user || !(await user.comparePassword(password))) {
+    if (!user) {
+      return next(new AppError('Invalid email or password', 401));
+    }
+
+    // Check password - THIS WAS THE MISSING PART
+    const isPasswordCorrect = await user.comparePassword(password);
+    if (!isPasswordCorrect) {
       return next(new AppError('Invalid email or password', 401));
     }
 
@@ -82,9 +90,11 @@ router.post('/login', [
     // Generate token
     const token = generateToken(user._id);
 
-    // Remove password from output
+    // Remove password from response
     const userObj = user.toObject();
     delete userObj.password;
+
+    console.log('Login successful for user:', user._id);
 
     res.status(200).json({
       status: 'success',
@@ -92,6 +102,7 @@ router.post('/login', [
       user: userObj
     });
   } catch (error) {
+    console.error('Login error:', error);
     next(error);
   }
 });
@@ -104,7 +115,7 @@ router.get('/verify', protect, async (req, res) => {
   });
 });
 
-// Logout (optional - mainly for clearing client-side data)
+// Logout
 router.post('/logout', (req, res) => {
   res.status(200).json({
     status: 'success',

@@ -57,7 +57,7 @@ const userSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Encrypt password before saving
+// Hash password before saving
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
   
@@ -65,9 +65,14 @@ userSchema.pre('save', async function(next) {
   next();
 });
 
-// Compare password method
+// Compare password method - FIXED VERSION
 userSchema.methods.comparePassword = async function(candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password);
+  try {
+    return await bcrypt.compare(candidatePassword, this.password);
+  } catch (error) {
+    console.error('Password comparison error:', error);
+    return false;
+  }
 };
 
 // Update cloudUser status
