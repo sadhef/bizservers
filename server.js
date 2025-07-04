@@ -34,19 +34,22 @@ const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const cloudReportRoutes = require('./routes/cloud-report');
 const backupServerRoutes = require('./routes/backup-server');
+const pushNotificationRoutes = require('./routes/pushNotifications');
 
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/cloud-report', cloudReportRoutes);
 app.use('/api/backup-server', backupServerRoutes);
+app.use('/api/push-notifications', pushNotificationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'success',
     message: 'BizTras API is running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    pushNotifications: !!process.env.VAPID_PUBLIC_KEY
   });
 });
 
@@ -65,6 +68,7 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Push Notifications: ${process.env.VAPID_PUBLIC_KEY ? 'Enabled' : 'Disabled'}`);
 });
 
 module.exports = app;
